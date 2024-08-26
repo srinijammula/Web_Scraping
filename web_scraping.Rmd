@@ -1,0 +1,121 @@
+```{r}
+# Load necessary libraries
+library(httr)
+library(rvest)
+library(jsonlite)
+library(dplyr)
+
+# to bypass cloudflare
+api_key <- "bfee92b72f345a9bf3e4005b5da9e3244bc8b75d"
+url <- "https://journals.sagepub.com/toc/JMX/current"
+
+# get response data using url
+response <- GET(
+  url = "https://api.zenrows.com/v1/",
+  query = list(
+    url = url,
+    js_render = "true",
+    apikey = api_key
+  )
+)
+print(status_code(response))
+content <- content(response, as = "text")
+parsed_html <- read_html(content)
+
+# extract journal list with hyperlinks
+table_of_content <- parsed_html %>% html_node(".table-of-content") 
+article_links <- table_of_content %>% html_nodes('a[data-id="toc-article-title"]') %>% html_attr("href")
+print('Extracted Article Links:')
+for(link in article_links){
+  print(link)
+}
+
+# store details in dataframe
+journal_info <- data.frame(
+  Title = character(),
+  Authors = character(),
+  First_published_date = character(),
+  Date_of_Issue = character(),
+  Abstract = character()
+)
+
+#function to extract details of each journal
+fetch_article_details <- function(article_url) {
+  base_url <- "https://journals.sagepub.com"
+  full_url <- paste0(base_url, article_url)
+  
+  # Fetch the article page
+  article_response <- GET(
+    url = "https://api.zenrows.com/v1/",
+    query = list(
+      url = full_url,
+      js_render = "true",
+      apikey = api_key
+    )
+  )
+  article_html <- content(article_response, as = "text")
+  article_parsed <- read_html(article_html)
+  
+  # Extract title
+  title <- article_parsed %>% html_node("h1[property='name']") %>% html_text(trim = TRUE)
+  print(title)
+  
+  # Extract authors
+  authors_section <- article_parsed %>% html_node(".core-authors")
+  if (!is.null(authors_section)) {
+    authors <- authors_section %>% html_nodes("[property='author']")
+    authors_list <- sapply(authors, function(author) {
+      given_name <- html_text(html_node(author, "[property='givenName']"))
+      family_name <- html_text(html_node(author, "[property='familyName']"))
+      paste(given_name, family_name)
+    })
+    authors <- paste(authors_list, collapse = ", ")
+    print(paste("Authors:", paste(authors_list, collapse = ", ")))
+  }
+  if (length(authors_list)<=1) authors <- "NA"
+  
+  
+  # Extract publication dates
+  date_labels <- article_parsed %>% html_nodes(".core-history")
+  lines <- date_labels %>% html_nodes("div") %>% html_text()
+  first_published <- trimws(sub(".*:\\s*", "", lines[1]))
+  issue_published <- trimws(sub(".*:\\s*", "", lines[2]))
+  print(paste("First Published Date:", first_published))
+  print(paste("Issue Published Date:", issue_published))
+  
+  
+  # Extract abstract
+  abstract_section <- article_parsed %>%
+    html_node("[property='abstract']")
+  if (!is.null(abstract_section)) {
+    abstract <- abstract_section %>%
+      html_node("div[role='paragraph']") %>%
+      html_text(trim = TRUE)
+    print(paste("Abstract:", abstract))
+  }
+  if (is.null(abstract)) abstract <- "NA"
+  
+  
+  journal_info <<- rbind(
+    journal_info,
+    data.frame(
+      Title = as.character(title),
+      Authors = as.character(authors),
+      First_published_date = as.character(first_published),
+      Date_of_Issue = as.character(issue_published),
+      Abstract = as.character(abstract),
+      stringsAsFactors = FALSE
+    )
+  )
+  print('-------------------------------------------')
+}
+
+for (link in article_links) {
+  fetch_article_details(link)
+}
+
+print(journal_info)
+
+# save to a CSV file
+write.csv(journal_info, "journal_info.csv", row.names = FALSE)
+```
